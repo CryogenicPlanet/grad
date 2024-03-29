@@ -1,7 +1,12 @@
 {
     "cSpell.words": [
+        "framecapture",
+        "gputrace",
+        "nums",
         "petgraph",
         "powi",
+        "preds",
+        "threadgroups",
         "ypred"
     ]
 }
