@@ -1,7 +1,7 @@
 pub mod utils {
     use std::collections::HashSet;
 
-    use crate::grad::{Value, MLP};
+    use crate::scalar::{Value, MLP};
 
     pub fn topological_sort<'a>(root: &'a Value) -> Vec<&'a Value> {
         fn visit<'a>(root: &'a Value, visited: &mut HashSet<String>, sorted: &mut Vec<&'a Value>) {

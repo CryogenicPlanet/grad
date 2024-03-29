@@ -1,14 +1,25 @@
-mod grad;
+#![feature(associated_type_defaults)]
+#[macro_use]
+extern crate lazy_static;
+
 mod graph;
+// mod old_tensor;
+mod nn;
+mod scalar;
+mod tensor;
 
-use grad::utils::{
-    gradient_descent, load_weights, prediction_loss, predictions, read_xy_from_json,
-};
-use grad::{Value, MLP};
+use scalar::utils::{gradient_descent, prediction_loss, predictions, read_xy_from_json};
+use scalar::{Value, MLP};
+use tensor::{get_raw_matrix, ArrayType, Matrix, Tensor};
+// use tensor::Vector;
 
-use crate::grad::utils::save_weights;
-use crate::graph::draw_dots;
-// use graph::draw_dots;
+use crate::scalar::utils::save_weights;
+
+use serde_json::json;
+use std::borrow::Borrow;
+use std::fs::File;
+use std::io::prelude::*;
+use std::vec;
 
 /*
 fn main() {
@@ -53,26 +64,16 @@ fn main() {
 */
 
 fn main() {
+    // moon_mlp();
+
+    let start = std::time::Instant::now();
+    // basic_tensor();
+    moon_mlp_tensor();
+    println!("Tensor test duration: {:?}", start.elapsed());
+
+    // let start = std::time::Instant::now();
     // basic_nn();
-    // draw_dots(loss);
-
-    moon_mlp();
-
-    // let model = MLP::new(2, vec![16, 16, 1]);
-
-    // let _ = load_weights(&model, "weights.bin");
-
-    // let (xs, ys) = read_xy_from_json("moonData.json").unwrap();
-
-    // let _ = generate_plot_data(&model, xs.clone(), ys.clone());
-
-    // for (gt, pred) in ys.iter().zip(predictions(&model, &xs).iter()).take(5) {
-    //     println!(
-    //         "gt {:?} vs prediction {:?}",
-    //         gt.get_number_val(),
-    //         pred.get_number_val()
-    //     );
-    // }
+    // println!("Basic NN test duration: {:?}", start.elapsed());
 }
 
 fn basic_nn() {
@@ -98,36 +99,36 @@ fn basic_nn() {
 
     let ys = vec![Value::n(1.0), Value::n(-1.0), Value::n(-1.0), Value::n(1.0)];
 
-    let mut loss_val =
-        prediction_loss(&n, &xs, |pred| generate_loss(pred, ys.clone())).get_number_val();
+    // let mut loss_val =
+    //     prediction_loss(&n, &xs, |pred| generate_loss(pred, ys.clone())).get_number_val();
 
-    println!("loss {:?}", loss_val);
+    // println!("loss {:?}", loss_val);
 
-    for _ in 0..100 {
-        if loss_val < 0.025 {
-            break;
-        }
+    // for _ in 0..100 {
+    //     if loss_val < 0.025 {
+    //         break;
+    //     }
 
-        for p in &params {
-            let old_number = p.get_number_val();
-            let new_number = old_number + (-0.05 * p.get_grad_val());
+    //     for p in &params {
+    //         let old_number = p.get_number_val();
+    //         let new_number = old_number + (-0.05 * p.get_grad_val());
 
-            p.number.replace(new_number);
-        }
+    //         p.number.replace(new_number);
+    //     }
 
-        loss_val =
-            prediction_loss(&n, &xs, |pred| generate_loss(pred, ys.clone())).get_number_val();
+    //     loss_val =
+    //         prediction_loss(&n, &xs, |pred| generate_loss(pred, ys.clone())).get_number_val();
 
-        println!("new loss {:?}", loss_val);
-    }
+    //     println!("new loss {:?}", loss_val);
+    // }
 
     let pred = predictions(&n, &xs);
 
     println!("new predictions {:?}", pred);
 
-    let loss = generate_loss(pred, ys.clone());
+    // let loss = generate_loss(pred, ys.clone());
 
-    draw_dots(loss);
+    // graph::scalar::draw_dots(loss);
 }
 
 fn moon_mlp() {
@@ -142,6 +143,7 @@ fn moon_mlp() {
             .iter()
             .zip(y_gt.iter())
             .map(|(ypred, yi)| {
+                // mean  v n
                 let margin_loss = (((yi * -1.0).borrow() * ypred).borrow() + 1.0).relu();
                 margin_loss
             })
@@ -205,95 +207,244 @@ fn moon_mlp() {
         );
     }
 
+    // Assuming `model` is a function that takes a slice of `Value` and returns a `Value`
+    // Assuming `Value` struct has a `data` field of type f64 for simplicity
+    fn generate_plot_data(model: &MLP, xs: Vec<Vec<Value>>, y: Vec<Value>) -> std::io::Result<()> {
+        let h = 0.25;
+        let (x_min, x_max) = (
+            xs.iter()
+                .map(|v| v[0].get_number_val())
+                .fold(f64::INFINITY, f64::min)
+                - 1.0,
+            xs.iter()
+                .map(|v| v[0].get_number_val())
+                .fold(f64::NEG_INFINITY, f64::max)
+                + 1.0,
+        );
+        let (y_min, y_max) = (
+            xs.iter()
+                .map(|v| v[1].get_number_val())
+                .fold(f64::INFINITY, f64::min)
+                - 1.0,
+            xs.iter()
+                .map(|v| v[1].get_number_val())
+                .fold(f64::NEG_INFINITY, f64::max)
+                + 1.0,
+        );
+        let mut xx = Vec::new();
+        let mut yy = Vec::new();
+        let mut inputs = Vec::new();
+
+        let x_steps = ((x_max - x_min) / h).round() as usize;
+        let y_steps = ((y_max - y_min) / h).round() as usize;
+
+        for i in 0..x_steps {
+            let mut xx_row = Vec::new();
+            let mut yy_row = Vec::new();
+            for j in 0..y_steps {
+                let x = x_min + i as f64 * h;
+                let y = y_min + j as f64 * h;
+                xx_row.push(x);
+                yy_row.push(y);
+                inputs.push(vec![Value::n(x), Value::n(y)]);
+            }
+            xx.push(xx_row);
+            yy.push(yy_row);
+        }
+
+        let scores: Vec<Value> = predictions(model, &inputs);
+
+        // println!("scores {:?}", scores);
+
+        let z: Vec<f64> = scores
+            .iter()
+            .map(|s| if s.get_number_val() > 0.0 { 1.0 } else { 0.0 })
+            .collect();
+
+        // println!("z {:?}", z);
+
+        let xs_serial: Vec<Vec<f64>> = xs
+            .iter()
+            .map(|v| v.iter().map(|val| val.get_number_val()).collect())
+            .collect();
+        let y_serializable: Vec<f64> = y.iter().map(|val| val.get_number_val()).collect();
+
+        // Assuming z is a flat Vec<f64> with the correct total number of elements
+        let mut z_reshaped = vec![vec![0.0; y_steps]; x_steps];
+
+        for (i, chunk) in z.chunks(y_steps).enumerate() {
+            z_reshaped[i] = chunk.to_vec();
+        }
+
+        let plot_data = json!({
+            "xx": xx,
+            "yy": yy,
+            "Z": z_reshaped,
+            "X": xs_serial,
+            "y": y_serializable
+        });
+
+        let mut file = File::create("plot_data.json")?;
+        file.write_all(plot_data.to_string().as_bytes())?;
+
+        Ok(())
+    }
+
     let _ = generate_plot_data(&n, xs, ys);
 
     let _ = save_weights(&n, "weights.bin");
 }
 
-use serde_json::json;
-use std::borrow::Borrow;
-use std::fs::File;
-use std::io::prelude::*;
+fn basic_tensor() {
+    // let a = Vector::new(vec![1.0, 2.0, 3.0]);
+    // let b = Vector::new(vec![4.0, 5.0, 6.0]);
+    // let c = &a * &b;
 
-// Assuming `model` is a function that takes a slice of `Value` and returns a `Value`
-// Assuming `Value` struct has a `data` field of type f64 for simplicity
-fn generate_plot_data(model: &MLP, xs: Vec<Vec<Value>>, y: Vec<Value>) -> std::io::Result<()> {
-    let h = 0.25;
-    let (x_min, x_max) = (
-        xs.iter()
-            .map(|v| v[0].get_number_val())
-            .fold(f64::INFINITY, f64::min)
-            - 1.0,
-        xs.iter()
-            .map(|v| v[0].get_number_val())
-            .fold(f64::NEG_INFINITY, f64::max)
-            + 1.0,
-    );
-    let (y_min, y_max) = (
-        xs.iter()
-            .map(|v| v[1].get_number_val())
-            .fold(f64::INFINITY, f64::min)
-            - 1.0,
-        xs.iter()
-            .map(|v| v[1].get_number_val())
-            .fold(f64::NEG_INFINITY, f64::max)
-            + 1.0,
-    );
-    let mut xx = Vec::new();
-    let mut yy = Vec::new();
-    let mut inputs = Vec::new();
+    // let d = &c * &a;
 
-    let x_steps = ((x_max - x_min) / h).round() as usize;
-    let y_steps = ((y_max - y_min) / h).round() as usize;
+    // println!("a: {:?}", a.get_number());
+    // println!("b: {:?}", b.get_number());
+    // println!("c: {:?}", c.get_number());
 
-    for i in 0..x_steps {
-        let mut xx_row = Vec::new();
-        let mut yy_row = Vec::new();
-        for j in 0..y_steps {
-            let x = x_min + i as f64 * h;
-            let y = y_min + j as f64 * h;
-            xx_row.push(x);
-            yy_row.push(y);
-            inputs.push(vec![Value::n(x), Value::n(y)]);
-        }
-        xx.push(xx_row);
-        yy.push(yy_row);
+    // d.backward();
+    // println!("d grad: {:?}", d.get_grad());
+    // println!("c grad: {:?}", c.get_grad());
+
+    // println!("a grad: {:?}", a.get_grad());
+    // println!("b grad: {:?}", b.get_grad());
+
+    // graph::tensor::draw_dots(d);
+
+    // let a: Tensor<Matrix> = Matrix::new_with_label(
+    //     vec![vec![1.0, 2.0, 3.0], vec![4.0, 5.0, 6.0]],
+    //     "a".to_string(),
+    // );
+
+    // // std::thread::sleep(std::time::Duration::from_secs(10));
+    // let b = Matrix::new_with_label(
+    //     vec![
+    //         vec![7.0, 8.0, 9.0],
+    //         vec![10.0, 11.0, 12.0],
+    //         vec![13.0, 14.0, 15.0],
+    //     ],
+    //     "b".to_string(),
+    // );
+
+    // let d = Matrix::new_with_label(
+    //     vec![vec![2.0, 2.0, 2.0], vec![2.0, 2.0, 2.0]],
+    //     "d".to_string(),
+    // );
+
+    // // std::thread::sleep(std::time::Duration::from_secs(10));
+    // let c = &a + &d;
+
+    // // c.backward();
+
+    // // TODO
+    // let e = (&c * &b).tanh();
+
+    // // println!("a {:?}", a.get_numbers());
+    // // println!("b {:?}", b.get_numbers());
+    // // println!("c: {:?}", c.get_numbers());
+
+    // // e.set_grad(1.0);
+    // // println!("e grad {:?}", e.get_grad());
+    // // e.backward();
+    // // println!("e grad {:?}", e.get_grad());
+    // // println!("d grad {:?}", d.get_grad());
+
+    // e.backward();
+    // println!("c grad: {:?}", c.get_grad());
+
+    // println!("a grad: {:?}", a.get_grad());
+    // println!("b grad: {:?}", b.get_grad());
+
+    // draw_dots(e)
+
+    // let neuron = nn::Neuron::new(4, 3);
+
+    let mlp = nn::MLP::new(&[3, 4, 4, 1]);
+
+    let x = Matrix::new(vec![
+        vec![2.0, 3.0, -1.0],
+        vec![3.0, -1.0, 0.5],
+        vec![0.5, 1.0, 1.01],
+        vec![1.0, 1.0, -1.01],
+    ]);
+
+    // let ys = Matrix::new(vec![vec![-1.0, -1.0]]);
+    let ys = Matrix::new(vec![vec![1.0], vec![-1.0], vec![-1.0], vec![1.0]]);
+
+    // // let y = neuron.call(x);
+
+    let mut loss = nn::prediction_loss(&mlp, &x, |pred| (pred - &ys).pow(2.0));
+
+    println!("first loss {:?}", loss.get_numbers());
+
+    // mlp.print_weights();
+
+    for i in 0..100 {
+        mlp.descend(-0.05);
+        // println!("DESCENT -------");
+
+        // mlp.print_weights();
+
+        loss = nn::prediction_loss(&mlp, &x, |pred| (pred - &ys).pow(2.0));
+        println!("loss {} {:?}", i, loss.get_numbers());
     }
 
-    let scores: Vec<Value> = predictions(model, &inputs);
+    let y = mlp.call(&x);
 
-    // println!("scores {:?}", scores);
+    println!(
+        "final preds {:?} shape {:?} {:?}",
+        y.get_numbers(),
+        y.size().unwrap(),
+        ys.size().unwrap()
+    );
 
-    let z: Vec<f64> = scores
-        .iter()
-        .map(|s| if s.get_number_val() > 0.0 { 1.0 } else { 0.0 })
-        .collect();
+    // let loss = (&y - &ys).pow(2.0);
 
-    // println!("z {:?}", z);
+    println!("loss {:?}", loss.get_numbers());
 
-    let xs_serial: Vec<Vec<f64>> = xs
-        .iter()
-        .map(|v| v.iter().map(|val| val.get_number_val()).collect())
-        .collect();
-    let y_serializable: Vec<f64> = y.iter().map(|val| val.get_number_val()).collect();
+    // y.backward();
+    // loss.backward();
 
-    // Assuming z is a flat Vec<f64> with the correct total number of elements
-    let mut z_reshaped = vec![vec![0.0; y_steps]; x_steps];
+    graph::tensor::draw_dots(loss);
 
-    for (i, chunk) in z.chunks(y_steps).enumerate() {
-        z_reshaped[i] = chunk.to_vec();
+    // println!("")
+    // mlp.descend(-0.1);
+}
+
+fn moon_mlp_tensor() {
+    let (xs, ys) = tensor::utils::read_xy_from_json("moonData.json").unwrap();
+
+    let n = nn::MLP::new(&[2, 16, 16, 1]);
+
+    fn gen_loss(y_out: &Tensor<Matrix>, y_gt: Tensor<Matrix>) -> Tensor<Matrix> {
+        println!("gen_loss");
+        (y_out - &y_gt).pow(2.0)
     }
 
-    let plot_data = json!({
-        "xx": xx,
-        "yy": yy,
-        "Z": z_reshaped,
-        "X": xs_serial,
-        "y": y_serializable
-    });
+    println!("yt {:?}", ys.get_numbers());
 
-    let mut file = File::create("plot_data.json")?;
-    file.write_all(plot_data.to_string().as_bytes())?;
+    let y = n.call(&xs);
 
-    Ok(())
+    println!("initial preds  {:?}", y.get_numbers());
+
+    // println!("shape {:?} y_gt {:?}", y.size(), ys.size());
+
+    let mut loss = nn::prediction_loss(&n, &xs, |pred| gen_loss(pred, ys.clone()));
+
+    for i in 0..30 {
+        n.descend(-0.1);
+
+        loss = nn::prediction_loss(&n, &xs, |pred| gen_loss(pred, ys.clone()));
+        println!("loss {} {:?}", i, loss.get_numbers());
+    }
+
+    let y_final = n.call(&xs);
+
+    println!("final preds  {:?}", y_final.get_numbers());
+
+    // println!("loss {:?}", loss.get_numbers());
 }
